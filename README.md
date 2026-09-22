@@ -56,11 +56,45 @@ URL parameters for automation: `?shot=1&pos=x,y,z&yaw=deg&pitch=deg&noao=1`.
 
 ## Credits
 
-Textures: Poly Haven (CC0). Water normals: three.js examples (MIT). Everything else is
-procedural (marble, friezes, coffers, foliage, clouds) and generated at load time.
+Textures: [Poly Haven](https://polyhaven.com) (CC0). Water normals: three.js examples (MIT,
+notice [below](#license)). Everything else is procedural (marble, friezes, coffers, foliage,
+clouds) and generated at load time.
 
 ## Screenshots
 
 ![approach](screenshots/approach.png)
 ![pteron](screenshots/pteron.png)
 ![harbour](screenshots/harbour.png)
+
+## License
+
+The code is MIT-licensed, see [LICENSE](LICENSE). The Poly Haven textures are CC0 (public
+domain).
+
+`textures/waternormals.jpg` comes from the
+[three.js examples](https://github.com/mrdoob/three.js/tree/dev/examples/textures) and is
+used under their MIT License:
+
+```
+The MIT License
+
+Copyright © 2010-2026 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
