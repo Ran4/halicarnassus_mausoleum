@@ -1,0 +1,20 @@
+{
+  "name": "halicarnassus-mausoleum",
+  "version": "1.0.0",
+  "description": "Walkable three.js reconstruction of the Mausoleum at Halicarnassus",
+  "main": "index.js",
+  "scripts": {
+    "start": "python3 -m http.server 8787 --bind 127.0.0.1",
+    "shots": "node tools/shots.mjs tools/views.example.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.43.1"
+  }
+}

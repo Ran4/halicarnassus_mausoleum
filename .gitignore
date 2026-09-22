@@ -1,0 +1,17 @@
+# Dependencies (npm install restores them)
+node_modules/
+
+# Ad-hoc captures from tools/shots.mjs, which writes into the working directory.
+# The README's screenshots live in screenshots/ and stay tracked.
+/*.png
+
+# Editors and OS
+*.swp
+*~
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*

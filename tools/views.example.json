@@ -1,0 +1,8 @@
+[
+ {"name":"y_corner.png","pos":[30,1.7,26],"yaw":45,"pitch":28},
+ {"name":"y_top.png","pos":[70,48,30],"yaw":70,"pitch":-8},
+ {"name":"y_nw.png","pos":[-60,30,-50],"yaw":-130,"pitch":-12},
+ {"name":"y_cols.png","pos":[19,21.9,-6],"yaw":80,"pitch":20},
+ {"name":"y_entry.png","pos":[112,1.7,0],"yaw":90,"pitch":6},
+ {"name":"y_platea.png","pos":[60,-3.8,64],"yaw":43,"pitch":15}
+]
