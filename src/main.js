@@ -11,6 +11,7 @@ import { buildSky, buildSea, buildClouds, buildTemenos, buildVegetation, buildSm
 import { buildCity } from './city.js';
 import { Player } from './player.js';
 import { buildPeople } from './people.js';
+import { buildLife } from './life/index.js';
 
 const overlay = document.getElementById('overlay'), startEl = document.getElementById('start'), bar = document.querySelector('#progress > div'), hud = document.getElementById('hud');
 const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
@@ -85,7 +86,7 @@ const world = {
 world.colliders.push(...mausoleumColliders);
 
 // ---------- build ----------
-let composer, gtao, player, seaMat, smoke, clouds, city, people;
+let composer, gtao, player, seaMat, smoke, clouds, city, people, life;
 const timer = new THREE.Timer();
 let useAO = true;
 
@@ -145,9 +146,14 @@ async function build() {
   // It may set world.dynamicBlocked(x, z, fromX, fromZ) → bool to stop the player walking through someone.
   status('filling the streets…', 0.88);
   // ?people=0 leaves the town empty (performance A/B)
-  people = new URLSearchParams(location.search).get('people') === '0' ? { group: null, count: 0, update() {}, debug: () => ({ count: 0 }) }
+  people = new URLSearchParams(location.search).get('people') === '0' ? { group: null, count: 0, update() {}, listen: () => [], speak() {}, debug: () => ({ count: 0 }) }
     : buildPeople({ M, world, layout: world.layout, scene, camera, renderer, setupMaterial: world.setupMaterial });
   if (people.group) scene.add(people.group);
+  await nextFrame();
+
+  // the living world (src/life/): wind, birds, ships, animals, hearth smoke, sound, overheard talk
+  status('waking the town…', 0.9);
+  life = await buildLife({ M, world, layout: world.layout, scene, camera, renderer, setupMaterial: world.setupMaterial, people, sunDir, csm });
   await nextFrame();
 
   // wait for texture files
@@ -167,7 +173,7 @@ async function build() {
   // GTAO renders the scene with an override material that ignores alphaTest: sprites (clouds, smoke) and leaf cards would be
   // drawn as solid quads there (pale halos around foliage), so they stay out of its pre-pass
   const origOverride = gtao._overrideVisibility.bind(gtao);
-  gtao._overrideVisibility = function () { origOverride(); this.scene.traverse(o => { if (o.visible && (o.isSprite || (o.isMesh && o.material && o.material.alphaTest > 0))) { o.visible = false; this._visibilityCache.push(o); } }); people.gtaoBegin?.(); };
+  gtao._overrideVisibility = function () { origOverride(); this.scene.traverse(o => { if (o.visible && (o.isSprite || o.userData.noAO || (o.isMesh && o.material && o.material.alphaTest > 0))) { o.visible = false; this._visibilityCache.push(o); } }); people.gtaoBegin?.(); };
   // the people animate in their vertex shader: they draw the normal pass with their own (animated) normal material
   const origRestore = gtao._restoreVisibility.bind(gtao);
   gtao._restoreVisibility = function () { origRestore(); people.gtaoEnd?.(); };
@@ -194,11 +200,11 @@ async function build() {
   status('compiling shaders…', 0.99);
   try { await renderer.compileAsync(scene, camera); } catch (e) { console.warn('compileAsync', e); }
   status('click to enter', 1);
-  overlay.addEventListener('click', () => player.lock());
+  overlay.addEventListener('click', () => { player.lock(); life.start(); });
   player.controls.addEventListener('lock', () => overlay.classList.add('hidden'));
   player.controls.addEventListener('unlock', () => { overlay.classList.remove('hidden'); status('click to continue', 1); });
   document.addEventListener('keydown', e => { if (e.code === 'KeyO') { useAO = !useAO; gtao.enabled = useAO; } });
-  window.__people = people; window.__world = world;
+  window.__people = people; window.__world = world; window.__life = life;
   window.__csm = csm; window.__scene = scene; window.__camera = camera; window.__player = player; window.__renderer = renderer;
   renderer.setAnimationLoop(animate);
 }
@@ -214,6 +220,7 @@ function animate() {
   if (smoke) smoke.userData.update(t);
   if (city) city.userData.update(dt, t, camera);
   if (people) people.update(dt, t, camera, player);
+  if (life) life.update(dt, t, camera, player);
   if (clouds) for (const c of clouds.children) c.position.x += c.userData.drift * dt * 0.8;
   renderer.info.reset();
   if (composer) { gtao.enabled = useAO; composer.render(); }
@@ -222,7 +229,7 @@ function animate() {
   if (hudT > 0.5) {
     fps = Math.round(frames / hudT); frames = 0; hudT = 0;
     const p = camera.position;
-    hud.innerHTML = `<b>${player && player.fly ? 'flying' : 'walking'}</b> · ${fps} fps · x ${p.x.toFixed(0)} y ${p.y.toFixed(1)} z ${p.z.toFixed(0)} · AO ${useAO ? 'on' : 'off'} · <b>F</b> fly · <b>O</b> ambient occlusion`;
+    hud.innerHTML = `<b>${player && player.fly ? 'flying' : 'walking'}</b> · ${fps} fps · x ${p.x.toFixed(0)} y ${p.y.toFixed(1)} z ${p.z.toFixed(0)} · AO ${useAO ? 'on' : 'off'} · <b>F</b> fly · <b>O</b> ambient occlusion · <b>M</b> sound · <b>T</b> subtitles`;
   }
 }
 

@@ -510,7 +510,7 @@ export function buildPeople(ctx) {
   const hx0 = f32(), hx1 = f32(), hz0 = f32(), hz1 = f32(), homeA = i32(-1), nodeA = i32(-1), nodeB = i32(-1), spotI = i32(-1), onSeat = u8();
   const dX = f64(), dZ = f64(), dYaw = f32(), failN = u8(), waitT = f32();
   const procT = i32(-1), procK = u8(), rLo = i32(0), rHi = i32(1 << 30);   // (a funeral procession: which one, and the place in its file; rLo..rHi: the stretch of its route a traveller keeps to)
-  const orator = u8(), runner = u8(), frozen = u8(), tether = u8(), partner = i32(-1), sideS = f32(), grp = i32(-1), blockT = f32(), stuckT = f32(), stuckN = u8(), sX = f64(), sZ = f64(), curious = u8(), lookP = u8();
+  const orator = u8(), runner = u8(), frozen = u8(), tether = u8(), partner = i32(-1), sideS = f32(), grp = i32(-1), blockT = f32(), stuckT = f32(), stuckN = u8(), sX = f64(), sZ = f64(), curious = u8(), lookP = u8(), talkT = f32();   // talkT: seconds left of a line someone is saying aloud (src/life/chatter.js)
   let n = 0;
   const stages = [], mark = nm => stages.push(nm + ' ' + n);   // (how many are placed after each pass, for debug())
   const occ = new Map();
@@ -1293,7 +1293,7 @@ export function buildPeople(ctx) {
   // last resort (no street graph at all): stand anywhere open
   for (let q = 0; n < N && q < 20000; q++) { const x = (R() - 0.5) * 800, z = R() * 500 - 60; if (trySpot(x, z)) spawn(K.SOLO, x, z, R() * TAU, 'any'); }
   const count = n;
-  const gMem = Int32Array.from(gMemL), gOff = Int32Array.from(gOffL), gLen = Int32Array.from(gLenL), gSpk = Int32Array.from(gSpkL), gTim = new Float32Array(gOffL.length).map(() => R() * 3), nG = gOffL.length;
+  const gMem = Int32Array.from(gMemL), gOff = Int32Array.from(gOffL), gLen = Int32Array.from(gLenL), gSpk = Int32Array.from(gSpkL), gTim = new Float32Array(gOffL.length).map(() => R() * 3), nG = gOffL.length, gCur = new Int32Array(gOffL.length).fill(-1);   // gCur: who holds the floor right now
   for (let i = 0; i < count; i++) { if (act[i] && actWT[i] > 0) actW[i] = 1; if (kind[i] === K.STREET || kind[i] === K.COMMUTE) spd[i] = vpref[i] * 0.8; }
 
   // ---------- meshes ----------
@@ -1566,7 +1566,7 @@ export function buildPeople(ctx) {
     for (let g = 0; g < nG; g++) {
       if ((gTim[g] -= dt) > 0) continue;
       const o = gOff[g], m = gLen[g], sp = gSpk[g], s = sp >= 0 && RR() < 0.85 ? sp : gMem[o + Math.floor(RR() * m)];   // an orator holds the floor
-      gTim[g] = 2 + RR() * 5;
+      gTim[g] = 2 + RR() * 5; gCur[g] = s;
       for (let q = 0; q < m; q++) {
         const j = gMem[o + q]; if (lookP[j] || mode[j] !== MD.IDLE) continue;
         if (j === sp) { gestT[j] = 1; const other = s !== j ? s : gMem[o + (q + 1 + Math.floor(RR() * (m - 1))) % m]; headT[j] = clamp(relAngle(j, other), -0.6, 0.6); }
@@ -1581,6 +1581,7 @@ export function buildPeople(ctx) {
     if (timer[i] <= 0) think(i);
     if (nextAct[i] >= 0 && actW[i] < 0.05) { act[i] = nextAct[i]; nextAct[i] = -1; actWT[i] = 1; }
     const k = Math.min(1, dt * 3.5);
+    if (talkT[i] > 0) { talkT[i] -= dt; if (talkT[i] <= 0) { gestT[i] = orator[i] ? 1 : 0; if (!curious[i]) { lookP[i] = 0; headT[i] = 0; } } else gestT[i] = 1; }   // (idleStep only lets go of the curious)
     headA[i] += (headT[i] - headA[i]) * k; gest[i] += (gestT[i] - gest[i]) * Math.min(1, dt * 2.5); actW[i] += (actWT[i] - actW[i]) * Math.min(1, dt * 2.2);
     lean[i] += ((mode[i] === MD.IDLE ? 0 : 0.04) - lean[i]) * k;
   }
@@ -1685,6 +1686,26 @@ export function buildPeople(ctx) {
     sitters() { const out = []; for (let i = 0; i < count; i++) if (sitH[i] > 0) { const f = sitH[i] <= 0.15 && ((seedP[i] * 0.99 * 7.3) % 1) < 0.5 && act[i] !== ACT.MEND; out.push({ i, h: sitH[i], ku: f, edge: onSeat[i] === 2, door: kind[i] !== K.PRAY && onSeat[i] === 0 && doorList.some(d => Math.hypot(d.x - px[i], d.z - pz[i]) < 2.2), x: +px[i].toFixed(1), z: +pz[i].toFixed(1) }); } return out; },
     // the camera in front of person i: dist metres out along their facing turned by side degrees, h above the ground there
     look(i, dist = 3, h = 1.5, side = 0, pitch = -8) { const a = yaw[i] + side * Math.PI / 180, cx = px[i] + Math.sin(a) * dist, cz = pz[i] + Math.cos(a) * dist; if (typeof window !== 'undefined' && window.__setView) window.__setView(cx, world.groundHeight(cx, cz) + h, cz, a * 180 / Math.PI, pitch); return [cx, cz]; },
+    // everyone within r of (x, z), for the sound and the overheard talk (src/life/): who they are and what they are doing.
+    // talking: holds the floor in their group (or is an orator); hammerT: the time offset of their hammer swing (the strike lands
+    // where fract((t + hammerT) * 0.85) passes 0.8, t = the clock people.update was given), -1 when not hammering
+    listen(x, z, r = 25) {
+      const out = [], R2 = r * r, c = Math.ceil(r / HC), ix = Math.floor(x / HC), iz = Math.floor(z / HC), kn = Object.keys(K);
+      for (let ox = -c; ox <= c; ox++) for (let oz = -c; oz <= c; oz++) for (let j = hHead[hIdx(ix + ox, iz + oz)]; j >= 0; j = hNext[j]) {
+        const dx = px[j] - x, dz = pz[j] - z, d2 = dx * dx + dz * dz; if (d2 >= R2 || Math.floor(px[j] / HC) !== ix + ox || Math.floor(pz[j] / HC) !== iz + oz) continue;
+        const g = grp[j], hammer = act[j] === ACT.HAMMER && actW[j] > 0.5;
+        out.push({ i: j, x: px[j], y: py[j], z: pz[j], yaw: yaw[j], d: Math.sqrt(d2), kind: kn[kind[j]], arch: arch[j], female: arch[j] === 2, child: !!(flagsB[j] & FL.CHILD),
+          walking: mode[j] !== MD.IDLE, speed: spd[j], group: g, groupSize: g >= 0 ? gLen[g] : 1, talking: !!orator[j] || (g >= 0 && gCur[g] === j && mode[j] === MD.IDLE), orator: !!orator[j],
+          act: act[j], hammerT: hammer ? seedP[j] * 0.99 * 97 : -1, state: stateName(j), seed: seedP[j] });
+      }
+      return out;
+    },
+    // person i says something for dur seconds: they gesture while it lasts, keep still, and (given a point) turn their head to it
+    speak(i, dur, lookX, lookZ) {
+      if (!(i >= 0 && i < count) || frozen[i]) return;
+      talkT[i] = dur; gestT[i] = 1; if (mode[i] === MD.IDLE) timer[i] = Math.max(timer[i], dur);
+      if (lookX !== undefined) { headT[i] = clamp(wrap(Math.atan2(lookX - px[i], lookZ - pz[i]) - yaw[i]), -1.15, 1.15); lookP[i] = 1; }
+    },
     near(x, z, r = 20) { const out = []; for (let i = 0; i < count; i++) if ((px[i] - x) ** 2 + (pz[i] - z) ** 2 < r * r) out.push({ i, s: stateName(i), x: +px[i].toFixed(1), z: +pz[i].toFixed(1), yaw: +yaw[i].toFixed(2) }); return out; },
   };
   const buildMs = perf.now() - tBuild;

@@ -226,6 +226,10 @@ export function build(ctx) {
   const leaf = { add: (g, m, c) => { wick.add(g, m, c); toCell(wick, LEAF_UV); return leaf; } };      // leaf cards share the wicker atlas and its mesh
   // M.cloth's grey plaster map is dark (~0.29 linear): lift the vertex colour so a colour reads as it would on M.painted; laundry is washed out a little
   const cloth = { add: (g, m, c, wash = 0) => { const k = new THREE.Color(c); if (wash) k.lerp(new THREE.Color(0xb8b0a0), wash); clothB.add(g, m, k.multiplyScalar(2.6)); } };
+  // the washing on the lines goes into a mesh of its own (userData.laundry), each piece also listed in L.laundry, the yard ovens in L.ovens and the
+  // balconies' front rails in L.balconies: src/life/hearths.js hides that mesh and blows the same pieces about in the wind, lights some of the ovens
+  // and hangs washing over some of the rails
+  const washB = new ColorBucket(), washing = L.laundry = [], ovens = L.ovens = [], balconies = L.balconies = [];
   const cols = [], steps = [], stoops = [], stats = { yards: 0, shops: 0, lots: {}, annex: 0, balcony: 0, pergola: 0 };
   const poi = p => L.addPoi({ owner: OWN, ...p });
   const pick = (R, a) => a[Math.floor(R() * a.length)];
@@ -356,7 +360,8 @@ export function build(ctx) {
     for (let s = 0.25 + R() * 0.3; s < L0 - 0.5;) {
       const cw = 0.45 + R() * 0.8, ch = 0.4 + R() * 0.65; if (s + cw > L0 - 0.2) break;
       const k = (s + cw / 2) / L0, yk = lerp(y0, y1, k) - sag * 4 * k * (1 - k);
-      cloth.add(pick(R, T.folds), mr(lerp(x0, x1, k), yk - 0.005, lerp(z0, z1, k), -a, (R() - 0.5) * 0.14, (R() - 0.5) * 0.05, V(cw, ch, 1)), pick(R, CLOTH), 0.28);
+      const fold = Math.floor(R() * T.folds.length), x = lerp(x0, x1, k), z = lerp(z0, z1, k), rx = (R() - 0.5) * 0.14, rz = (R() - 0.5) * 0.05, col = new THREE.Color(pick(R, CLOTH)).lerp(new THREE.Color(0xb8b0a0), 0.28).multiplyScalar(2.6);
+      washB.add(T.folds[fold], mr(x, yk - 0.005, z, -a, rx, rz, V(cw, ch, 1)), col); washing.push({ x, y: yk - 0.005, z, ry: -a, rx, rz, w: cw, h: ch, fold, col });
       s += cw + 0.1 + R() * 0.45;
     }
   }
@@ -383,6 +388,7 @@ export function build(ctx) {
     altar(x, z, R, dir = [0, 1]) { const g = gy(x, z); B.marble.add(boxF(0.6, 0.9, 0.6, 'XxYZz'), mat(x, g + 0.35, z)); B.marble.add(boxF(0.72, 0.1, 0.72, 'XxYyZz'), mat(x, g + 0.82, z)); collide(rectOf(x, z, x, z, 0.36)); poi({ type: 'altar', x: x + dir[0] * 0.9, z: z + dir[1] * 0.9, y: g, ry: Math.atan2(-dir[0], -dir[1]), r: 1, note: 'Zeus Herkeios', _o: [x, z] }); },
     oven(x, z, ry, R) {       // clay dome; an arched mouth set back behind a thick clay rim, a sill stone, firewood
       const g = gy(x, z), fx = Math.sin(ry), fz = Math.cos(ry), at = (o, y, ra = 0) => mr(x + fx * o, y, z + fz * o, ry, ra);
+      ovens.push({ x, z, y: g, ry });
       terra.add(T.dome, mat(x, g - 0.05, z, 0, ry, 0, V(1, 1.05, 1.1)), 0xa88462);
       B.doors.add(T.mouth, at(0.8, g - 0.03)); terra.add(T.rim, at(0.88, g - 0.03), 0xb48c6a); terra.add(T.hood, at(0.82, g - 0.03), 0xa88462);
       B.socles.add(boxF(0.66, 0.12, 0.3, 'XxYZ'), mat(x + fx * 1.03, g - 0.03, z + fz * 1.03, 0, ry, 0));
@@ -557,7 +563,7 @@ export function build(ctx) {
       const dims = { pithos: [2.2, 0.6], oven: [1.7, 0.85], loom: [1.8, 0.5], bench: [1.7, 0.3], amph: [1.5, 0.3], wood: [1.3, 0.4], pots: [1.4, 0.3] }[k];
       const p = wallSpot(dims[0], dims[1], k === 'loom' && R() < 0.6); if (!p) continue;
       const [x, z] = at(p[0], p[1]), ry = yawOf(p[2]);
-      if (k === 'pithos') IT.pithos(x, z, ry, R, 1 + Math.floor(R() * 2)); else if (k === 'oven') IT.oven(x, z, ry, R); else if (k === 'loom') IT.loom(x, z, ry, R);
+      if (k === 'pithos') IT.pithos(x, z, ry, R, 1 + Math.floor(R() * 2)); else if (k === 'oven') { IT.oven(x, z, ry, R); if (inf.pastas && p[1] < inf.pastas + 1.0) ovens[ovens.length - 1].covered = true; } else if (k === 'loom') IT.loom(x, z, ry, R);
       else if (k === 'bench') IT.bench(x, z, ry, R); else if (k === 'amph') IT.amph(x, z, ry, R); else if (k === 'wood') IT.wood(x, z, ry, R); else IT.pots(x, z, ry, R);
       n++;
     }
@@ -587,7 +593,8 @@ export function build(ctx) {
     dk.add(boxF(W, 0.07, 0.09, 'YyZz'), f.M(uc, y + 0.95, Dp - 0.04));
     if (R() < 0.7) { dk.add(boxF(W - 0.1, 0.55, 0.03, 'Zz'), f.M(uc, y + 0.45, Dp - 0.05)); for (const s of [-1, 1]) dk.add(boxF(0.03, 0.55, Dp - 0.1, 'Xx'), f.M(uc + s * (W / 2 - 0.05), y + 0.45, Dp / 2)); }
     else { const n = Math.min(5, Math.floor(W / 0.4)); for (let i = 1; i < n; i++) dk.add(boxF(0.045, 0.85, 0.045, 'XxZz'), f.M(uc - W / 2 + i * W / n, y + 0.45, Dp - 0.04)); }
-    if (R() < 0.45) { const cw = 0.6 + R() * 0.7; cloth.add(T.ccard, f.M(uc + (R() - 0.5) * (W - cw - 0.2), y + 0.62, Dp + 0.02, 0, V(cw, 0.72, 1)), pick(R, CLOTH)); }
+    const draped = R() < 0.45; if (draped) { const cw = 0.6 + R() * 0.7; cloth.add(T.ccard, f.M(uc + (R() - 0.5) * (W - cw - 0.2), y + 0.62, Dp + 0.02, 0, V(cw, 0.72, 1)), pick(R, CLOTH)); }
+    { const a = f.P(uc - W / 2 + 0.1, Dp), b = f.P(uc + W / 2 - 0.1, Dp); balconies.push({ x0: a[0], z0: a[1], x1: b[0], z1: b[1], y: y + 0.985, nx: f.nx, nz: f.nz, ry: f.ry, draped }); }
     if (R() < 0.35) { const u = uc + (R() < 0.5 ? -1 : 1) * (W / 2 - 0.35); terra.add(T.herb, f.M(u, y + 0.13, Dp - 0.3), pick(R, TERRA)); leaf.add(T.card2, f.M(u, y + 0.45, Dp - 0.3, R(), 0.6), 0x8ab868); }
     stats.balcony++;
   }
@@ -1601,4 +1608,5 @@ export function build(ctx) {
   for (const [bk, m, sh] of [[terra, M.terracotta, true], [paint, M.painted, true], [bark, M.barkOlive, true], [clothB, clothMat, true], [wick, wickerMat, true], [rub, M.rubble, true]]) {
     const mesh = bk.mesh(m, sh); if (mesh) { mesh.name = OWN; ctx.G.add(mesh); }
   }
+  { const mesh = washB.mesh(clothMat, true); if (mesh) { mesh.name = OWN + '-laundry'; mesh.userData.laundry = true; ctx.G.add(mesh); } }
 }

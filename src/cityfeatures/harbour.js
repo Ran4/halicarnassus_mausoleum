@@ -121,8 +121,8 @@ function amphoraGeo(segs = 7, handles = true) {
   if (handles) for (const s of [-1, 1]) b.add(new THREE.TorusGeometry(0.075, 0.016, 3, 4, Math.PI), mat(s * 0.075, 0.715, 0, 0, 0, -s * Math.PI / 2));
   return b.build();
 }
-// open boat hull, keel at y=0 amidships, bow +x: returns {outer, band, inner} geometries
-function hullGeo(len, wid, dep, n = 12, m = 10) {
+// open boat hull, keel at y=0 amidships, bow +x: returns {outer, band, inner} geometries (also used by src/life/ships.js)
+export function hullGeo(len, wid, dep, n = 12, m = 10) {
   const ring = (i, inset) => {
     const t = i / n * 2 - 1, w = Math.max(0.02, wid / 2 * Math.pow(Math.max(0, 1 - t * t), 0.55) - inset), sheer = dep + 0.22 * t * t * (t > 0 ? 1.5 : 1), d = dep * (1 - 0.38 * t * t) - inset;
     const A = [0, 0.13, 0.45, 0.85, 1.2, Math.PI / 2], pts = []; for (let j = 0; j <= m; j++) { const a = j <= m / 2 ? A[Math.round(j / (m / 2) * 5)] : Math.PI - A[Math.round((m - j) / (m / 2) * 5)]; pts.push([t * len / 2 * (1 - inset * 0.3), sheer - Math.max(0, d) * Math.pow(Math.sin(a), 0.75), -w * Math.cos(a)]); }

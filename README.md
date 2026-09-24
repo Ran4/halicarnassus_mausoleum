@@ -22,6 +22,8 @@ Open http://127.0.0.1:8787 and click to enter. Needs WebGL2 with hardware accele
 | Space          | jump                                           |
 | F              | toggle flying (E / Q or Space / Ctrl = up/down)|
 | O              | toggle ambient occlusion (GTAO)                |
+| M              | sound on / off                                 |
+| T              | subtitles for what people say                  |
 | Esc            | release the mouse                              |
 
 You spawn at the east propylon of the precinct. The steps of the krepis are walkable; the
@@ -46,6 +48,39 @@ honorific statues and cypresses; the Hippodamian town on the slope; the platea, 
 with three stoas, quay, moles and ships; the theatre on the hill, the Temple of Ares on
 its terrace, the palace on the east promontory and the circuit wall on the ridges.
 
+## The living world
+
+`src/life/` puts life on top of the built town, one module each (`?life=birds,ships` loads only those, `?life=0` none):
+
+- **wind** (`wind.js`) — one breeze from the west-north-west, with gusts you can watch travel across the land: the
+  olives, pines, plane trees and cypresses sway with it (a cypress bends like a flame; the shadows sway too), the leaves
+  flutter and glitter, the agora's awnings and sails billow. Butterflies over the gardens and orchards, dust and pollen
+  in the sunlight.
+- **birds** (`birds.js`) — swallows darting over the roofs and skimming the squares, yellow-legged gulls circling
+  the harbour, floating in the basin and standing on the moles, pigeons and sparrows pecking on the temenos, the agora
+  and the platea that burst up when you walk at them and land again further off, kestrels hovering over the slopes.
+- **ships** (`ships.js`) — a trireme under oars (170 oars in three banks, in stroke) patrolling the bay and rowing in
+  to the royal shipsheds, merchantmen whose square sails belly and luff with the gusts, fishing boats rowing along the
+  shore or hauling nets, all heaving on the swell with wakes behind them.
+- **animals** (`fauna.js`) — street dogs trotting, sniffing, lying in the shade, trailing passers-by (one may follow
+  you; guard dogs bark at you from their doors), hens and roosters scratching at the poultry stalls and in the yards,
+  belled herds of sheep and goats grazing beyond the walls, strings of pack donkeys on the roads.
+- **hearths** (`hearths.js`) — thin smoke from kitchen hearths and bread ovens all over the town drifting down-wind,
+  ovens glowing in the courtyards, sailors' cooking fires on the quay, washing swinging on the lines.
+- **sound** (`audio.js`, `synth.js`) — everything you hear is synthesized at load in a Web Worker, no sound files: wind
+  that swells with the gusts and grows on the heights, surf on the open shore and water slapping the quay, cicadas in
+  the country, sparrows in the eaves, the murmur of the crowd where people stand thick. People talk: a formant
+  synthesizer speaks transliterated Attic/Ionic Greek (aspirated stops, trilled *r*, a pitch accent on every word).
+  Hammers, chisels and adzes sound on the frame the swing lands. A lyre player sits in the agora, an aulos plays at the
+  altar, and a chorus rehearses the parodos of the *Bacchae* in the theatre. Everything above has its voice — gulls,
+  pigeons, barking dogs, goat bells, a cock crowing, the splash of the trireme's oars and the call of the stroke,
+  crackling ovens, washing snapping in a gust — and your sandals sound on paving or earth. All of it placed in 3D
+  (HRTF) with distance absorption.
+- **overheard talk** (`chatter.js`) — stallholders cry their wares in Greek, with the sense beneath; knots of talkers
+  gossip about what Halicarnassus had on its mind around 350 BC (Artemisia's capture of Rhodes and Demosthenes' speech
+  about it, the orators' contest Theopompus won, the four sculptors still at work on the tomb, Artaxerxes' Egyptian
+  war, the Salmakis spring); an orator declaims; passers-by greet the stranger. The speaker gestures and turns to you.
+
 ## Screenshots without a window
 
 `tools/shots.mjs` drives headless Chrome (real GPU via ANGLE) and captures a list of views:
@@ -53,6 +88,9 @@ its terrace, the palace on the east promontory and the circuit wall on the ridge
     npm run shots      # writes the views in tools/views.example.json
 
 URL parameters for automation: `?shot=1&pos=x,y,z&yaw=deg&pitch=deg&noao=1`.
+
+`tools/listen.mjs` does the same for sound: it records the scene's mix at a list of spots to `.webm` files
+(`node tools/listen.mjs spots.json`, spots `{name, pos, yaw, pitch, sec}`), for checking levels and spectrograms.
 
 ## Credits
 
