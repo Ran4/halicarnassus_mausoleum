@@ -8,8 +8,9 @@
 // wings, legs) and an instance keeps only its own species' vertices (the others collapse to a point). The pose — flap,
 // swept glide, wings folded along the back, walking legs, the pigeon's head-bob and peck, a fanned tail — is computed per
 // vertex from per-instance attributes, in the lit and the shadow-depth pass alike. CPU side: steering for the swallows and
-// the soaring gulls and eagles, Bézier flights between two spots for everything that takes off and lands, a walk / peck /
-// look-round loop on the ground; birds far from the camera think less often.
+// the soaring gulls and eagles, flights between two spots for everything that takes off and lands (a course clear of what
+// stands in the way — read off depth renders of the town — flown at the bird's own rates of climb, sink and braking), a walk /
+// peck / look-round loop on the ground; birds far from the camera think less often.
 //
 // Events (ctx.emit): 'flutter' {n, species} a flock (or one bird) takes off · 'gull' {flying} a gull calls ·
 // 'coo' {n} pigeons near the camera · 'chirp' {n} sparrows near the camera · 'swallow' {n} swallows screaming past close by.
@@ -25,6 +26,11 @@ const A = { IDLE: 0, WALK: 1, PECK: 2, HOP: 3, CALL: 4 };
 const NB = 400;
 // per species: height of the shoulder line over the feet, flee distance, cull distance, extra size far away, bounding radius
 const STAND = [0.03, 0.054, 0.103, 0.176, 0.09], FLEE = [0, 3.2, 4.5, 6.5, 0], CULL = [380, 170, 330, 1300, 3500], BOOST = [1.3, 0.5, 0.45, 1.1, 1.0], RAD = [0.2, 0.15, 0.35, 0.75, 0.45];
+// per species, for the flights that take off and land: the steepest the course climbs and sinks, the fastest climb and sink (m/s),
+// speed off the jump (m/s), acceleration and braking (m/s²), touch-down speed (m/s)
+const GUP = [0.9, 0.9, 0.9, 0.4, 0.9], GDN = [0.7, 0.7, 0.6, 0.45, 0.6], VUP = [3.0, 3.0, 3.0, 2.2, 3.0], VDN = [3.5, 3.5, 3.5, 3.5, 3.5];
+const V0 = [1.8, 1.8, 2.0, 1.5, 2.0], ACC = [6, 6, 4.5, 3.5, 4.5], DEC = [3.5, 3.5, 3.0, 2.2, 3.0], VTD = [1.0, 1.0, 1.2, 1.5, 1.2];
+const FK = 24, FK1 = FK + 1;   // stations along a flight's course
 
 // ---------- geometry (+Z forward, +X the left wing, origin between the shoulders) ----------
 const C = h => new THREE.Color(h);   // sRGB hex → linear
@@ -215,6 +221,52 @@ function patchMaterial(m, kind) {
   return m;
 }
 
+// ---------- what stands where: depth renders of the finished scene from straight above and below ----------
+// Over each cell of a grid (x0, z0 its corner, nx × nz cells of `cell` m, rendered at 1 m): the highest solid surface within a
+// metre of it (roofs, stalls, statues, trunks; the ground or the sea where nothing stands), and the top and the underside of any
+// foliage there (tree crowns, vines, nets: whatever is cut out of cards). Opaque meshes only (no sky, clouds, smoke, people,
+// nothing that moves); null where float render targets cannot be read back.
+function heightsFromAbove(renderer, scene, x0, z0, nx, nz, cell, skip) {
+  if (!renderer || !scene || !renderer.extensions.has('EXT_color_buffer_float')) return null;
+  const W = nx * cell, D = nz * cell, SOLID = 30, LEAF = 31, far = 700, out = new Set(), marked = [];
+  for (const g of skip) if (g) g.traverse(o => out.add(o));
+  scene.traverseVisible(o => {
+    if (!o.isMesh || out.has(o) || o.userData.noAO) return;
+    const ms = (Array.isArray(o.material) ? o.material : [o.material]).filter(m => m && !m.transparent && m.side !== THREE.BackSide && !m.isShaderMaterial);
+    if (!ms.length) return;
+    const l = ms.some(m => m.alphaTest > 0) ? LEAF : SOLID; o.layers.enable(l); marked.push([o, l]);
+  });
+  const rt = new THREE.WebGLRenderTarget(W, D, { type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
+  const mat = new THREE.MeshDepthMaterial({ side: THREE.DoubleSide });   // (red: 1 − depth, linear under an orthographic camera)
+  const cam = new THREE.OrthographicCamera(-W / 2, W / 2, D / 2, -D / 2, 1, far), px = new Float32Array(W * D * 4);
+  const res = { solid: new Float32Array(nx * nz), leafTop: new Float32Array(nx * nz), leafBot: new Float32Array(nx * nz) };
+  // one layer seen from height y0, looking down (dir 1) or up (dir −1), each cell the highest (lowest) thing within a metre
+  const pass = (layer, y0, dir, into) => {
+    cam.position.set(x0 + W / 2, y0, z0 + D / 2); cam.up.set(0, 0, -dir); cam.lookAt(x0 + W / 2, y0 - dir, z0 + D / 2); cam.updateMatrixWorld(); cam.layers.set(layer);
+    renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, cam); renderer.readRenderTargetPixels(rt, 0, 0, W, D, px);
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+      let h = dir > 0 ? -1e9 : 1e9;
+      for (let z = Math.max(0, j * cell - 1); z <= Math.min(D - 1, j * cell + cell); z++) {
+        const r = dir > 0 ? D - 1 - z : z;   // (the camera's up is −z looking down, +z looking up: the read-back's rows run accordingly)
+        for (let x = Math.max(0, i * cell - 1); x <= Math.min(W - 1, i * cell + cell); x++) { const v = y0 - dir * (1 + (1 - px[(r * W + x) * 4]) * (far - 1)); h = dir > 0 ? Math.max(h, v) : Math.min(h, v); }
+      }
+      into[j * nx + i] = h;
+    }
+  };
+  const was = { rt: renderer.getRenderTarget(), over: scene.overrideMaterial, bg: scene.background, col: renderer.getClearColor(new THREE.Color()), a: renderer.getClearAlpha() };
+  let ok = true;
+  try {
+    scene.overrideMaterial = mat; scene.background = null; renderer.setClearColor(0x000000, 0);
+    pass(SOLID, 600, 1, res.solid); pass(LEAF, 600, 1, res.leafTop); pass(LEAF, -200, -1, res.leafBot);
+  } catch (e) { console.warn('[birds] no heights:', e); ok = false; }
+  finally {
+    scene.overrideMaterial = was.over; scene.background = was.bg; renderer.setRenderTarget(was.rt); renderer.setClearColor(was.col, was.a);
+    for (const [o, l] of marked) o.layers.disable(l);
+    rt.dispose(); mat.dispose();
+  }
+  return ok ? res : null;
+}
+
 export async function build(ctx) {
   const { world, layout } = ctx, people = ctx.people && ctx.people.listen ? ctx.people : null;
   const wind = ctx.wind || { dx: 0.93, dz: 0.36, speed: 4.5, gust: () => 1 }, emit = ctx.emit || (() => {});
@@ -250,6 +302,17 @@ export async function build(ctx) {
   const cellOf = (x, z) => { const i = Math.floor((x - GX) / CS), j = Math.floor((z - GZ) / CS); return i < 0 || j < 0 || i >= NX || j >= NZ ? -1 : j * NX + i; };
   const floorAt = (x, z) => { const k = cellOf(x, z); return k < 0 ? Math.max(terrainHeight(x, z), SEA) + 16 : gFloor[k]; };
 
+  // ---------- what the take-off-and-land flights must clear, over each 2 m cell ----------
+  // the solid tops, and tree crowns (heightsFromAbove); without them, the flight floor
+  const TC = 2, TNX = NX * CS / TC, TNZ = NZ * CS / TC;
+  const hm = heightsFromAbove(ctx.renderer, ctx.scene, GX, GZ, TNX, TNZ, TC, [ctx.people && ctx.people.group]);
+  const cellT = (x, z) => { const i = Math.floor((x - GX) / TC), j = Math.floor((z - GZ) / TC); return i < 0 || j < 0 || i >= TNX || j >= TNZ ? -1 : j * TNX + i; };
+  const solidAt = (x, z) => { const k = cellT(x, z); return k < 0 ? Math.max(terrainHeight(x, z), SEA) : hm ? Math.max(hm.solid[k], SEA) : floorAt(x, z) - 1.2; };
+  // the crown over (x, z), if there is one above the solid top: [its top, its underside]
+  const crownAt = (x, z) => { const k = cellT(x, z); return k >= 0 && hm && hm.leafTop[k] > Math.max(hm.solid[k], SEA) ? [hm.leafTop[k], hm.leafBot[k]] : null; };
+  // what a bird flying at about height y over (x, z) has to clear: a crown too, unless it can pass under it
+  const topAt = (x, z, y = Infinity) => { const s = solidAt(x, z), c = crownAt(x, z); return c && c[1] - 0.6 < y ? Math.max(s, c[0]) : s; };
+
   // ---------- where birds may come down: the paved squares (and, for sparrows, yards and gardens) ----------
   const NPG = ['temenos', 'agora', 'platea', 'quay', 'civic square', 'market lane', 'sanctuary of Apollo: court before the temple', 'sanctuary of Apollo: west court', 'prytaneion court', 'palaestra court'];
   const NSP = [...NPG, 'yard', 'garden', 'work yard', 'sanctuary of Apollo: laurel grove', 'gymnasium grove'];
@@ -281,7 +344,10 @@ export async function build(ctx) {
   const ph = F(), om = F(), amp = F(), ampT = F(), swp = F(), swpT = F(), fold = F(), foldT = F(), dih = F(), dihT = F(), tail = F(), tailT = F(), legO = F(), legOT = F(), legP = F(), legA = F();
   const hp = F(), hpT = F(), hy = F(), hyT = F(), bob = F(), bobT = F();
   const tA = F(), tB = F(), tC = F(), tD = F(), gx = F(), gy = F(), gz = F(), gg = F(), spd = F(), hdg = F(), trn = F(), trnT = F(), jx = F(), jy = F(), jz = F(), callT = F(), lastT = F(), cnt = F();
-  const bz = new Float32Array(NB * 12), fT = F(), fU = F(), fD = F();   // Bézier flights: 4 control points, duration, progress, delay
+  // flights: the course over the ground (a cubic in x, z), distance along it and height at each station; length, distance flown,
+  // delay, speed over the ground, time aloft, cruising speed, the station just passed
+  const bz = new Float32Array(NB * 8), fS = new Float32Array(NB * FK1), fY = new Float32Array(NB * FK1);
+  const fT = F(), fU = F(), fD = F(), fV = F(), fE = F(), fC = F(), fK = new Uint8Array(NB);
   let n = 0;
   function add(s, state, x, y, z, yw) {
     if (n >= NB) return -1;
@@ -410,31 +476,49 @@ export async function build(ctx) {
     }
   }
 
-  // ---------- flights: a cubic Bézier from where the bird is to where it will be ----------
-  const _b = [0, 0, 0];
-  function bezAt(P, u) { const a = 1 - u, b0 = a * a * a, b1 = 3 * a * a * u, b2 = 3 * a * u * u, b3 = u * u * u; for (let c = 0; c < 3; c++) _b[c] = P[c] * b0 + P[3 + c] * b1 + P[6 + c] * b2 + P[9 + c] * b3; return _b; }
-  const _P = new Float32Array(12);
+  // ---------- flights: a curve over the ground from where the bird is to where it will be, and a height along it ----------
+  // The height keeps clear of whatever stands under the course (not of the spots it leaves and lands on; under a tree's crown
+  // where there is room) and, for a bird going up off its feet, adds a few metres of cruising height; it is the lowest line over
+  // all that which climbs and sinks no steeper than the species does. Where something close forces it steeper, moveFlight slows
+  // the bird to hold its rate of climb.
+  const _b = [0, 0], _x = new Float32Array(FK1), _z = new Float32Array(FK1), _c = new Float32Array(FK1), _o = new Float32Array(FK1), _u = new Float32Array(FK1), _t = new Float32Array(FK1);
+  function bezXZ(o, u) { const a = 1 - u, b0 = a * a * a, b1 = 3 * a * a * u, b2 = 3 * a * u * u, b3 = u * u * u; _b[0] = bz[o] * b0 + bz[o + 2] * b1 + bz[o + 4] * b2 + bz[o + 6] * b3; _b[1] = bz[o + 1] * b0 + bz[o + 3] * b1 + bz[o + 5] * b2 + bz[o + 7] * b3; return _b; }
   function planFlight(i, X, Y, Z, next, speed, delay = 0, air = false) {
-    const x0 = px[i], y0 = py[i], z0 = pz[i], dx = X - x0, dz = Z - z0, L = Math.hypot(dx, dz) + 0.01, ux = dx / L, uz = dz / L;
-    const T = clamp((L + Math.abs(Y - y0) * 0.6) / speed, 0.6, 16) + 0.45;
-    let sx, sy, sz;
-    if (air) { sx = vx[i]; sy = vy[i]; sz = vz[i]; } else { const up = sp[i] === GU ? 2.4 : 3.6; sx = ux * speed * 0.3; sy = up + Math.max(0, Y - y0) / T; sz = uz * speed * 0.3; }
-    const back = Math.min(L * 0.18, 5), leave = next === ST.SOAR;
-    _P.set([x0, y0, z0, x0 + sx * T / 3, y0 + sy * T / 3, z0 + sz * T / 3,
-      leave ? X - ux * L * 0.3 : X - ux * back, leave ? Y : Y + Math.max(0.8, Math.min(4, L * 0.07)), leave ? Z - uz * L * 0.3 : Z - uz * back, X, Y, Z]);
-    // raise the middle of the path over whatever it crosses, leaving the take-off and the landing alone
-    const u1 = next === ST.PERCH ? 0.78 : next === ST.WATER ? 0.9 : 0.86;
-    for (let it = 0; it < 4; it++) {
-      let need = 0; for (let q = 1; q < 12; q++) { const u = q / 12; if (u < 0.12 || u > u1) continue; const b = bezAt(_P, u); need = Math.max(need, floorAt(b[0], b[2]) + 0.5 - b[1]); }
-      if (need <= 0) break; _P[4] += need * 1.5; _P[7] += need * 1.5;
+    const s = sp[i], x0 = px[i], y0 = py[i], z0 = pz[i], dx = X - x0, dz = Z - z0, L = Math.hypot(dx, dz) + 0.01, ux = dx / L, uz = dz / L, leave = next === ST.SOAR;
+    // the course: straight from a standing start, out of the heading it has for a bird already on the wing
+    const h0 = Math.hypot(vx[i], vz[i]), hx = air && h0 > 0.5 ? vx[i] / h0 : ux, hz = air && h0 > 0.5 ? vz[i] / h0 : uz, o = i * 8, q = i * FK1, a = L * 0.35, b = L * (leave ? 0.3 : 0.25);
+    bz.set([x0, z0, x0 + hx * a, z0 + hz * a, X - ux * b, Z - uz * b, X, Z], o);
+    let S = 0;
+    for (let k = 0; k <= FK; k++) { const p = bezXZ(o, k / FK); if (k) S += Math.hypot(p[0] - _x[k - 1], p[1] - _z[k - 1]); _x[k] = p[0]; _z[k] = p[1]; fS[q + k] = S; }
+    S = Math.max(S, 1e-3);
+    const gU = Math.max(GUP[s], (Y - y0) / S * 1.1), gD = Math.max(GDN[s], (y0 - Y) / S * 1.1), clr = Math.min(1.2, 0.3 + S * 0.1);
+    const H = air || leave || st[i] === ST.PERCH ? 0 : Math.min(s === SP ? clamp(0.8 + S * 0.04, 1, 2.5) : clamp(1.4 + S * 0.06, 1.8, 5), 0.2 + S * 0.2);
+    // what each station must clear (_c): the hop, anything solid, and a crown — unless the bird passes under it at the height it
+    // flies there anyway: then the crown's underside is a ceiling (_u), and where the line comes out above that, it goes over (_o)
+    for (let k = 0; k <= FK; k++) {
+      const d = fS[q + k], e = S - d, m = Math.min(clr, gU * d, gD * e);
+      _c[k] = lerp(y0, Y, d / S) + Math.min(H, gU * d, gD * e);   // (a hop over the straight line from spot to spot)
+      _o[k] = -1e9; _u[k] = 1e9;
+      if (d > 1.5 && e > 1.5) {
+        _c[k] = Math.max(_c[k], solidAt(_x[k], _z[k]) + m);
+        const cr = crownAt(_x[k], _z[k]);
+        if (cr) { _o[k] = cr[0] + m; _u[k] = cr[1] - 0.6; if (_u[k] < _c[k]) _c[k] = Math.max(_c[k], _o[k]); }
+      }
     }
-    bz.set(_P, i * 12); fT[i] = T; fU[i] = 0; fD[i] = delay; nxt[i] = next; st[i] = ST.FLIGHT;
-    act[i] = A.IDLE; bobT[i] = 0; hyT[i] = 0;
+    fY[q] = y0; fY[q + FK] = Y;
+    for (let it = 0; it < 6; it++) {
+      for (let k = 1; k < FK; k++) { const d = fS[q + k]; let y = -1e9; for (let j = 0; j <= FK; j++) { const dj = fS[q + j]; y = Math.max(y, _c[j] - (dj > d ? gU * (dj - d) : gD * (d - dj))); } fY[q + k] = y; }
+      let over = false; for (let k = 1; k < FK; k++) if (fY[q + k] > _u[k] && _c[k] < _o[k]) { _c[k] = _o[k]; over = true; }
+      if (!over) break;
+    }
+    for (let pass = 0; pass < 2; pass++) { _t.set(fY.subarray(q, q + FK1)); for (let k = 1; k < FK; k++) fY[q + k] = (_t[k - 1] + 2 * _t[k] + _t[k + 1]) / 4; }
+    fT[i] = S; fU[i] = 0; fK[i] = 0; fD[i] = delay; fC[i] = speed; fV[i] = air ? Math.max(h0, 2) : V0[s]; fE[i] = air ? 9 : 0;   // (on the wing already: no take-off)
+    nxt[i] = next; st[i] = ST.FLIGHT; act[i] = A.IDLE; bobT[i] = 0; hyT[i] = 0;
   }
   function land(i) {
-    const k = nxt[i], s = sp[i];
+    const k = nxt[i], s = sp[i], climb = vy[i];
     vx[i] = vy[i] = vz[i] = 0; bnk[i] = 0; pitT[i] = 0; ampT[i] = 0; dihT[i] = 0; tailT[i] = 0; swpT[i] = 0;
-    if (k === ST.SOAR) { startSoar(i, Math.max(py[i] + 4, gullAlt())); vx[i] = Math.sin(yaw[i]) * spd[i]; vz[i] = Math.cos(yaw[i]) * spd[i]; return; }
+    if (k === ST.SOAR) { startSoar(i, Math.max(py[i] + 4, gullAlt())); vx[i] = Math.sin(yaw[i]) * spd[i]; vz[i] = Math.cos(yaw[i]) * spd[i]; vy[i] = climb; return; }
     st[i] = k; foldT[i] = 1; legOT[i] = k === ST.WATER ? 0 : 1; act[i] = A.IDLE; tA[i] = 0.3 + R() * 1.2; hpT[i] = 0;
     gg[i] = k === ST.WATER ? SEA : py[i] - STAND[s];
     if (s === GU) { if (k === ST.WATER) tA[i] = 50 + R() * 160; else tD[i] = 40 + R() * 160; }
@@ -446,24 +530,42 @@ export async function build(ctx) {
   let camX = 0, camZ = 0, camY = 0, camYaw = 0, flushes = 0;
   const ev = { flutter: 0, gull: 0, coo: 0, chirp: 0, swallow: 0 };
   const say = (type, x, y, z, data) => { ev[type]++; emit(type, x, y, z, data); };
+  // how hard the way from one spot to another is for species s: how far it must rise over what stands between (above the higher
+  // end), and, weighing more, how much of that rise comes too close to either end to be climbed or sunk at the species' own slope
+  function wayCost(s, x0, z0, y0, x1, z1, y1) {
+    const L = Math.hypot(x1 - x0, z1 - z0); let over = 0, steep = 0;
+    for (let d = 1.5; d <= L - 1.5; d += 2) {
+      const u = d / L, t = topAt(lerp(x0, x1, u), lerp(z0, z1, u), Math.max(y0, y1) + 2.5);
+      over = Math.max(over, t - Math.max(y0, y1)); steep = Math.max(steep, t + 1.2 - y0 - GUP[s] * d, t + 1.2 - y1 - GDN[s] * (L - d));
+    }
+    return over + steep * 3;
+  }
   function pickLanding(f, ax, az, d0, d1) {
     const zs = f.s === SP ? zonesSP : zonesPG;
     let ox = f.cx - ax, oz = f.cz - az; const ol = Math.hypot(ox, oz); if (ol < 0.01) { ox = Math.sin(R() * TAU); oz = Math.cos(R() * TAU); } else { ox /= ol; oz /= ol; }
     const away = Math.atan2(ox, oz);
+    let best = null, bc = 1e9;
     for (let q = 0; q < 60; q++) {
       const a = away + (R() - 0.5) * (q < 30 ? 2.2 : 5.5), d = d0 + R() * (d1 - d0), x = f.cx + Math.sin(a) * d, z = f.cz + Math.cos(a) * d;
       const zn = zoneAt(zs, x, z); if (!zn) continue;
       if ((x - camX) ** 2 + (z - camZ) ** 2 < 196) continue;
       const y = okSpot(x, z, zn.y); if (Number.isNaN(y)) continue;
-      return { x, z, y };
+      // somewhere in the open, and the way there low and easy (a stall or a statue is hopped over; a house or a tree next to the
+      // flock is flown over only if nothing else will do)
+      const L = Math.hypot(x - f.cx, z - f.cz), ux = (f.cx - x) / L, uz = (f.cz - z) / L;
+      if (q < 40 && [0, 1.2, 2.4].some(b => topAt(x + ux * b, z + uz * b, y + 1) > y + 0.5)) continue;
+      const c = wayCost(f.s, f.cx, f.cz, f.gy, x, z, y);
+      if (c < 3.5) return { x, z, y };
+      if (c < bc) { bc = c; best = { x, z, y }; }
     }
-    return null;
+    return best;
   }
   function pickSite(f) {
     let best = null, bd = 1e9;
     for (let q = 0; q < sites.length; q++) {
-      const s = sites[q], d0 = Math.hypot(s.x - f.cx, s.z - f.cz), d = d0 + R() * 30;
+      const s = sites[q], d0 = Math.hypot(s.x - f.cx, s.z - f.cz);
       if (d0 < 20 || d0 > 70 || (s.x - camX) ** 2 + (s.z - camZ) ** 2 < 100) continue;
+      const d = d0 + R() * 30 + wayCost(PG, f.cx, f.cz, f.gy, s.x + s.dx * s.len / 2, s.z + s.dz * s.len / 2, s.y) * 6;
       if (d < bd && s.occ.filter(v => v < 0).length >= f.m.length + 2) { bd = d; best = s; }
     }
     return best;
@@ -628,9 +730,15 @@ export async function build(ctx) {
     if (!eagle && (tD[i] -= dt) <= 0) {
       tD[i] = 40 + R() * 90;
       if (gullsDown < 24) {
-        const free = stands.filter(s => s.i < 0);
-        if (free.length && R() < 0.4) { const s = free[Math.floor(R() * free.length)]; standGull(i, s); planFlight(i, s.x, s.y + STAND[GU], s.z, ST.GROUND, 8, 0, true); }
-        else { const [x, z] = water(); planFlight(i, x, SEA + 0.045, z, ST.WATER, 8, 0, true); }
+        // the nearest of a few spots it can glide down to at a gull's slope: it comes in from a distance, it does not drop out of the sky
+        const free = stands.filter(s => s.i < 0); let best = null, bc = Infinity;
+        for (let q = 0; q < 8; q++) {
+          const s = free.length && R() < 0.4 ? free[Math.floor(R() * free.length)] : null, [x, z] = s ? [s.x, s.z] : water(), y = s ? s.y + STAND[GU] : SEA + 0.045;
+          const L = Math.hypot(x - px[i], z - pz[i]), g = (py[i] - y) / L, c = g < 0.35 ? L : 1e4 * g;
+          if (c < bc) { bc = c; best = { s, x, y, z }; }
+        }
+        if (best.s) standGull(i, best.s);
+        planFlight(i, best.x, best.y, best.z, best.s ? ST.GROUND : ST.WATER, 8, 0, true);
       }
     }
   }
@@ -670,30 +778,50 @@ export async function build(ctx) {
   // ---------- moving (every frame, for everything in the air) ----------
   function moveFlight(i, dt, t) {
     if (fD[i] > 0) { fD[i] -= dt; hpT[i] = -0.3; hyT[i] = 0; return; }   // about to go: head up
-    const T = fT[i], u = fU[i] = Math.min(1, fU[i] + dt / T), o = i * 12, a = 1 - u, s = sp[i];
-    const b0 = a * a * a, b1 = 3 * a * a * u, b2 = 3 * a * u * u, b3 = u * u * u, d0 = 3 * a * a / T, d1 = 6 * a * u / T, d2 = 3 * u * u / T;
-    px[i] = bz[o] * b0 + bz[o + 3] * b1 + bz[o + 6] * b2 + bz[o + 9] * b3; py[i] = bz[o + 1] * b0 + bz[o + 4] * b1 + bz[o + 7] * b2 + bz[o + 10] * b3; pz[i] = bz[o + 2] * b0 + bz[o + 5] * b1 + bz[o + 8] * b2 + bz[o + 11] * b3;
-    vx[i] = (bz[o + 3] - bz[o]) * d0 + (bz[o + 6] - bz[o + 3]) * d1 + (bz[o + 9] - bz[o + 6]) * d2; vy[i] = (bz[o + 4] - bz[o + 1]) * d0 + (bz[o + 7] - bz[o + 4]) * d1 + (bz[o + 10] - bz[o + 7]) * d2; vz[i] = (bz[o + 5] - bz[o + 2]) * d0 + (bz[o + 8] - bz[o + 5]) * d1 + (bz[o + 11] - bz[o + 8]) * d2;
-    const hs = Math.hypot(vx[i], vz[i]), toSoar = nxt[i] === ST.SOAR, landing = !toSoar && u > 0.8;
-    if (hs > 0.35) { const ch = clamp(wrap(Math.atan2(vx[i], vz[i]) - yaw[i]), -8 * dt, 8 * dt); yaw[i] += ch; bnk[i] += (clamp(-ch / Math.max(dt, 1e-3) * hs / 9.8, -1, 1) - bnk[i]) * Math.min(1, dt * 6); }
-    pitT[i] = clamp(Math.atan2(vy[i], Math.max(hs, 0.5)), -0.75, 1.0) * 0.8 + (landing ? (u - 0.8) * 3.5 : 0) + (u < 0.1 && !toSoar ? 0.35 : 0);
+    const s = sp[i], q = i * FK1, S = fT[i], toSoar = nxt[i] === ST.SOAR;
+    // the speed over the ground: up from the jump towards cruising, held down where the course climbs or sinks steeply (looking
+    // as far ahead as it takes to slow down), braked to touch down
+    let k = fK[i], vT = fC[i];
+    const d0 = fU[i], ahead = d0 + fV[i] * fV[i] / 10 + 1.5;
+    for (let j = k; j < FK && (j === k || fS[q + j] < ahead); j++) {
+      // (and the sink eased off towards the ground, as the speed is: 0.8 m/s at touch-down)
+      const g = (fY[q + j + 1] - fY[q + j]) / Math.max(1e-3, fS[q + j + 1] - fS[q + j]), h = (j === k ? py[i] : fY[q + j]) - fY[q + FK];
+      const sink = toSoar ? VDN[s] : Math.min(VDN[s], Math.sqrt(0.64 + 6 * Math.max(0, h)));
+      const cap = g > 0.05 ? VUP[s] / g : g < -0.05 ? sink / -g : 1e9;
+      vT = Math.min(vT, Math.sqrt(cap * cap + 10 * Math.max(0, fS[q + j] - d0)));   // (no faster than it can brake, at 5 m/s², to that stretch's speed)
+    }
+    if (!toSoar) vT = Math.min(vT, Math.sqrt(VTD[s] * VTD[s] + 2 * DEC[s] * Math.max(0, S - d0)));
+    if (fE[i] === 0) fV[i] = Math.min(fV[i], vT);   // (off the feet no faster than the first stretch allows)
+    const v = fV[i] = Math.max(0.02, fV[i] + clamp(vT - fV[i], -8 * dt, ACC[s] * dt)), brake = vT < v - 0.5;
+    const d = fU[i] = Math.min(S, fU[i] + v * dt), e = fE[i] += dt;
+    while (k < FK - 1 && fS[q + k + 1] <= d) k++;
+    fK[i] = k;
+    const s0 = fS[q + k], ds = fS[q + k + 1] - s0, f = ds > 1e-4 ? clamp((d - s0) / ds, 0, 1) : 1, u = (k + f) / FK, o = i * 8, a = 1 - u;
+    const p = bezXZ(o, u); px[i] = p[0]; pz[i] = p[1]; py[i] = fY[q + k] + (fY[q + k + 1] - fY[q + k]) * f;
+    let tx = a * a * (bz[o + 2] - bz[o]) + 2 * a * u * (bz[o + 4] - bz[o + 2]) + u * u * (bz[o + 6] - bz[o + 4]), tz = a * a * (bz[o + 3] - bz[o + 1]) + 2 * a * u * (bz[o + 5] - bz[o + 3]) + u * u * (bz[o + 7] - bz[o + 5]);
+    const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+    vx[i] = tx * v; vz[i] = tz * v; vy[i] = ds > 1e-4 ? (fY[q + k + 1] - fY[q + k]) / ds * v : 0;
+    // the last metres: legs down, tail fanned, the body pitched up into the flare
+    const rem = S - d, near = 1.2 + v * 0.7, landing = !toSoar && rem < near, flare = landing ? 1 - rem / near : 0, off = e < 0.35 && !toSoar;
+    if (v > 0.35) { const ch = clamp(wrap(Math.atan2(vx[i], vz[i]) - yaw[i]), -8 * dt, 8 * dt); yaw[i] += ch; bnk[i] += (clamp(-ch / Math.max(dt, 1e-3) * v / 9.8, -1, 1) - bnk[i]) * Math.min(1, dt * 6); }
+    pitT[i] = clamp(Math.atan2(vy[i], Math.max(v, 0.5)), -0.75, 1.0) * 0.8 + flare * 0.7 + (off ? 0.35 : 0);
     pit[i] += (pitT[i] - pit[i]) * Math.min(1, dt * 8);
-    foldT[i] = 0; tailT[i] = landing || u < 0.1 ? 1 : 0.2; legOT[i] = landing ? 1 : u < 0.08 && st[i] !== ST.WATER ? 1 : 0; hpT[i] = 0; hyT[i] = 0; bobT[i] = 0; swpT[i] = 0.1; dihT[i] = 0;
+    foldT[i] = 0; tailT[i] = landing || off ? 1 : 0.2; legOT[i] = landing || e < 0.25 ? 1 : 0; hpT[i] = 0; hyT[i] = 0; bobT[i] = 0; swpT[i] = 0.1; dihT[i] = 0;
     const climb = vy[i];
     if (s === PG) {
-      if (u < 0.2 || climb > 1) { ampT[i] = u < 0.12 ? 1.15 : 1.0; om[i] = TAU * 8.5; }
-      else if (landing) { ampT[i] = 0.95; om[i] = TAU * 8; }
+      if (e < 0.8 || climb > 1) { ampT[i] = e < 0.45 ? 1.15 : 1.0; om[i] = TAU * 8.5; }
+      else if (landing || brake) { ampT[i] = 0.95; om[i] = TAU * 8; }
       else if (climb < -1) { ampT[i] = 0; dihT[i] = 0.5; }   // the pigeon's glide, wings held up in a V
       else { ampT[i] = 0.75; om[i] = TAU * 6.5; }
     } else if (s === SP) {   // bounding: a burst of beats, then a moment with the wings shut
       const c = (t * 2.6 + vari[i] * 3) % 1;
-      if (u < 0.15 || landing || c < 0.62) { ampT[i] = 0.95; om[i] = TAU * 14; } else { ampT[i] = 0; foldT[i] = 1; }
+      if (e < 0.5 || landing || c < 0.62) { ampT[i] = 0.95; om[i] = TAU * 14; } else { ampT[i] = 0; foldT[i] = 1; }
     } else if (s === GU) {
-      if (u < 0.35 || climb > 1.2) { ampT[i] = 0.85; om[i] = TAU * 3; }
+      if (e < 1.5 || climb > 1.2) { ampT[i] = 0.85; om[i] = TAU * 3; }
       else if (landing) { ampT[i] = 0.7; om[i] = TAU * 3.3; }
       else { ampT[i] = 0; dihT[i] = 0.06; }
     }
-    if (u >= 1) land(i);
+    if (d >= S) land(i);
   }
   function moveHawk(i, dt) {
     const s = Math.hypot(vx[i], vy[i], vz[i]) || 1;
@@ -887,12 +1015,13 @@ export async function build(ctx) {
       for (let i = 0; i < n; i++) { bySp[SPN[sp[i]]] = (bySp[SPN[sp[i]]] || 0) + 1; const k = SPN[sp[i]] + ':' + stN[st[i]]; bySt[k] = (bySt[k] || 0) + 1; }
       let avg = 0, mx = 0; const nn = Math.min(updK, 120); for (let k = 0; k < nn; k++) { avg += updMs[k]; mx = Math.max(mx, updMs[k]); }
       let low = 0, inside = 0; for (let i = 0; i < n; i++) { if (st[i] === ST.HAWK && py[i] < floorAt(px[i], pz[i]) - 0.5) low++; if ((st[i] === ST.GROUND) && world.blocked(px[i], pz[i])) inside++; }
-      return { birds: n, bySpecies: bySp, byState: bySt, drawn, trisPerBird, swallowsBelowFloor: low, groundBirdsInColliders: inside, flocks: flocks.length, perchSites: sites.length, gullStands: stands.length, flushes, events: { ...ev },
+      return { birds: n, bySpecies: bySp, byState: bySt, drawn, trisPerBird, swallowsBelowFloor: low, groundBirdsInColliders: inside, flocks: flocks.length, perchSites: sites.length, heights: !!hm, gullStands: stands.length, flushes, events: { ...ev },
         updateMsAvg: +(avg / Math.max(1, nn)).toFixed(3), updateMsMax: +mx.toFixed(3), buildMs: Math.round(buildMs) };
     },
     // for tests and screenshots
     flocks: () => flocks.map(f => ({ id: f.id, s: SPN[f.s], n: f.m.length, state: f.state, x: +f.cx.toFixed(1), y: +f.gy.toFixed(2), z: +f.cz.toFixed(1) })),
     birds: (s, state) => { const out = []; for (let i = 0; i < n; i++) if ((s === undefined || SPN[sp[i]] === s) && (state === undefined || Object.keys(ST)[st[i]] === state)) out.push({ i, x: +px[i].toFixed(2), y: +py[i].toFixed(2), z: +pz[i].toFixed(2), yaw: +yaw[i].toFixed(2), st: Object.keys(ST)[st[i]] }); return out; },
+    top: (x, z, y) => topAt(x, z, y), crown: (x, z) => crownAt(x, z),   // what a flight over (x, z) at height y must clear; a tree's crown there
     tame(on = true) { tame = on; }, freeze(on = true) { frozen = on; tFrozen = lastTime; },
     // the camera `dist` m from bird i, `side` degrees round from behind it, `up` m above it, looking at it
     look(i, dist = 3, side = 30, up = 0.5) { const a = yaw[i] + Math.PI + side * Math.PI / 180, x = px[i] + Math.sin(a) * dist, z = pz[i] + Math.cos(a) * dist, y = Math.max(py[i] + up, world.groundHeight(x, z) + 0.52);   /* (a flying camera keeps 0.5 m off the ground) */ if (window.__setView) window.__setView(x, y, z, Math.atan2(-(px[i] - x), -(pz[i] - z)) * 180 / Math.PI, Math.atan2(py[i] - y, Math.hypot(px[i] - x, pz[i] - z)) * 180 / Math.PI); return [x, y, z]; },
