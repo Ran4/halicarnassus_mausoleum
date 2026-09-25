@@ -230,8 +230,20 @@ export function colorize(g, color) {
   g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
   return g;
 }
+function weatherize(c, w, own = false) {
+  c.userData.ownWear = own;
+  const p = c.attributes.position, n = p.count, a = new Float32Array(n * 4);
+  let y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < n; i++) { const y = p.getY(i); if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  for (let i = 0; i < n; i++) { const y = p.getY(i); a[i * 4] = 99; a[i * 4 + 1] = y1 - y; a[i * 4 + 2] = y - y0; a[i * 4 + 3] = w; }
+  c.setAttribute('weather', new THREE.BufferAttribute(a, 4));
+}
 export class ColorBucket extends Bucket {
-  add(g, m, color = 0xffffff) {
+  // weather: a default wear (0 = kept fresh .. 1 = falling apart) turns on the per-vertex `weather` attribute
+  // (x = height above the ground, filled in by fillGround(); y = below the piece's top; z = above its bottom; w = wear),
+  // which src/weather/*.js read. add() then takes the piece's own wear, else the bucket's default.
+  constructor(weather = null) { super(); this.weather = weather; }
+  add(g, m, color = 0xffffff, wear = null) {
     let c = g.index ? g.clone() : mergeVertices(g, 1e-4);
     for (const k of Object.keys(c.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') c.deleteAttribute(k);
     if (!c.attributes.normal) c.computeVertexNormals();
@@ -239,7 +251,22 @@ export class ColorBucket extends Bucket {
     c.clearGroups();
     colorize(c, color);
     if (m) c.applyMatrix4(m);
+    if (this.weather !== null) weatherize(c, wear ?? this.weather, wear !== null);
     this.list.push(c); return this;
+  }
+  build() { if (this.weather !== null) for (const c of this.list) if (!c.attributes.weather) weatherize(c, this.weather); return super.build(); }
+  // weather.x = height above ground(x, z) for every piece added so far; pieces added without a wear of their own
+  // take wearAt(x, z) at their centre when it gives one (a yard wall wears like its house)
+  fillGround(ground, wearAt = null) {
+    for (const c of this.list) {
+      if (!c.attributes.weather) weatherize(c, this.weather);   // pieces some features push straight onto .list
+      const p = c.attributes.position, a = c.attributes.weather;
+      for (let i = 0; i < p.count; i++) a.setX(i, p.getY(i) - ground(p.getX(i), p.getZ(i)));
+      if (wearAt && !c.userData.ownWear) {
+        c.computeBoundingBox(); const b = c.boundingBox, w = wearAt((b.min.x + b.max.x) / 2, (b.min.z + b.max.z) / 2);
+        if (w !== null) for (let i = 0; i < p.count; i++) a.setW(i, w);
+      }
+    }
   }
   at(g, x, y, z, ry = 0, s = 1, color = 0xffffff) { return this.add(g, mat(x, y, z, 0, ry, 0, s), color); }
 }

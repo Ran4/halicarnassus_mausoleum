@@ -1,5 +1,7 @@
 // All materials, built from Polyhaven PBR sets + procedural maps.
 import * as THREE from 'three';
+import { weatherWalls } from './weather/walls.js';
+import { weatherRoofs } from './weather/roofs.js';
 import { loadSet, makeMarble, makeFrieze, makeCoffer, makeMeander, makeLeafCard, makePalmette, makeCloud, makeMacroNoise, makeEggDart, makeCypressBody } from './textures.js';
 
 export function createMaterials(loader) {
@@ -59,6 +61,7 @@ export function createMaterials(loader) {
   M.barkOlive = std(T.barkOlive, { color: 0xb9b0a0 });
   M.barkPine = std(T.barkPine, { color: 0xa8875f });
   M.doorDark = new THREE.MeshStandardMaterial({ color: 0x2a1c12, roughness: 0.9 });
+  M.doorWood = std(T.wood, { vertexColors: true, color: 0xffffff, envMapIntensity: 0.3 });   // house doors: planks, tinted per door (weathered grey .. old paint)
   M.sand = std(T.gravel, { color: 0xe0d2b4, envMapIntensity: 0.3 });
   M.roadEarth = std(T.dirt, { color: 0xcbbba4, normalScale: new THREE.Vector2(0.45, 0.45), envMapIntensity: 0.35 });   // the country roads: trodden terrain dirt
   // vertex-coloured generics for the town's clutter (use with ColorBucket)
@@ -79,6 +82,8 @@ export function createMaterials(loader) {
   addMacroVariation(M.plaster, T.macro, 1 / 25, 0.18);
   addMacroVariation(M.roof, T.macro, 1 / 30, 0.2);
   addMacroVariation(M.roadEarth, T.macro, 1 / 45, 0.22);
+  weatherWalls(M.plaster, T);
+  weatherRoofs(M.roof, T);
 
   M.terrain = makeTerrainMaterial(T);
   M.sea = makeSeaMaterial(T);

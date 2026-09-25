@@ -48,6 +48,20 @@ honorific statues and cypresses; the Hippodamian town on the slope; the platea, 
 with three stoas, quay, moles and ships; the theatre on the hill, the Temple of Ares on
 its terrace, the palace on the east promontory and the circuit wall on the ridges.
 
+## Wear and weather
+
+The town is lived in rather than new. Every house has an age (`houseWear()` in `src/city.js`: most are kept up,
+better on the platea and near the precinct and shabbier out towards the walls and the harbour, a few freshly
+limewashed and a few neglected). The walls and roofs show it through a per-vertex `weather` attribute that
+`src/weather/walls.js` and `src/weather/roofs.js` read in the shader:
+
+- **walls**: splash and rising damp along the foot, with a tide mark; rain streaks under the eaves; limewash
+  gone yellow-grey in blotches, and old repairs in a different tone. On older houses the walls crack and the
+  plaster falls away (low down above all) to show the mud brick beneath. Some houses were never whitewashed and
+  show bare clay plaster.
+- **roofs**: tile-to-tile colour, replaced tiles, lichen and grime, and on neglected roofs broken or missing tiles.
+- **doors**: plank leaves, oiled or painted on kept houses and silver-grey on the rest.
+
 ## The living world
 
 `src/life/` puts life on top of the built town, one module each (`?life=birds,ships` loads only those, `?life=0` none):

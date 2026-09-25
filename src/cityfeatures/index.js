@@ -9,7 +9,8 @@
 //   world      { colliders: [{minX,maxX,minZ,maxZ}], extraGround: [fn(x,z)→y|-Infinity], groundHeight(x,z), blocked(x,z) }
 //   layout     src/layout.js — blocks, lots, houses, reserved, roads, areas, pois, updaters
 //   B          the city's shared buckets (merged into one mesh per material at the end — cheapest to draw):
-//              walls (ColorBucket, M.plaster), roofs (ColorBucket, M.roof), socles (M.sandstone), doors (M.doorDark),
+//              walls (ColorBucket, M.plaster), roofs (ColorBucket, M.roof), socles (M.sandstone), doors (M.doorDark: openings, voids),
+//              doorWood (ColorBucket, M.doorWood: plank door leaves — plankUV() and doorColor() in city.js),
 //              marble, grey (M.marbleGrey), ashlar, pave, wood, woodDark, canvas (M.sand), egg (M.eggDart),
 //              statue (M.marbleStatue), gravel
 //   G          the city THREE.Group — add your own meshes here when a shared bucket does not fit
@@ -26,5 +27,6 @@ import * as industry from './industry.js';
 import * as outskirts from './outskirts.js';
 import * as residential from './residential.js';
 import * as streets from './streets.js';
+import * as disrepair from './disrepair.js';
 
-export const FEATURES = [civic, agora, harbour, industry, outskirts, residential, streets];
+export const FEATURES = [civic, agora, harbour, industry, outskirts, residential, streets, disrepair];

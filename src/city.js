@@ -29,17 +29,44 @@ export function insideWalls(x, z, m = 0) {
 
 const PLASTER = [0xf1e9d8, 0xe8dcc4, 0xe6d3b0, 0xf4efe4, 0xd9c7a3, 0xe9d9c0, 0xdcc39a, 0xefe3cd];
 const ROOFS = [0xc8804f, 0xb8714a, 0xd08b5a, 0xa8654a, 0xc5895f, 0xbf7d55];
+// never whitewashed, or not for years: the clay plaster itself, and limewash gone the colour of the dust
+const CLAY = [0xc9ae8a, 0xbfa07a, 0xd2b994, 0xb89a74, 0xcdb89a, 0xc4aa86];
+const OLDROOFS = [0x9c6a4e, 0x8f6450, 0xa27258, 0x94705c];
+// door leaves: dark oiled wood, faded paint, and bare planks gone silver-grey in the sun
+const DOORS_KEPT = [0x5a4232, 0x4a3628, 0x6c7f7c, 0x8a5040, 0x5d6a58, 0x704a34];
+const DOORS_OLD = [0x9a948a, 0x8c8478, 0xa39a8c, 0x7c7266];
+// planks running up and down a door leaf (box() lays its UVs out in metres: swap them)
+export const plankUV = g => { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getY(i), uv.getX(i)); return g; };
+const DOOR_LEAF = plankUV(box(1.1, 2.1, 0.14));
+// a house's door colour: the better kept a house, the likelier its door is oiled or painted
+export function doorColor(id, wear) {
+  const R = rng(4409 + id * 13);
+  return R() < wear * 0.9 ? DOORS_OLD[Math.floor(R() * DOORS_OLD.length)] : DOORS_KEPT[Math.floor(R() * DOORS_KEPT.length)];
+}
+// How worn a house is (0 = just limewashed .. 1 = falling apart), drawn from its own stream so the town's layout is untouched:
+// better kept on the platea and near the precinct, shabbier out towards the walls and down by the harbour.
+export function houseWear(id, x, z) {
+  const R = rng(7331 + id * 97);
+  const far = smoothstep(420, 950, Math.hypot(x, z)), port = smoothstep(250, 420, z);
+  let w = 0.2 + 0.25 * far + 0.15 * port + (R() - 0.5) * 0.3;
+  const r = R();
+  if (r < 0.08) w = R() * 0.1;                       // freshly limewashed this spring
+  else if (r > 0.93) w = 0.82 + R() * 0.18;          // neglected: an old widow's, a let-out tenement, an empty house
+  else if (r > 0.8) w = 0.5 + R() * 0.3;             // due for a new coat these ten years
+  return clamp(w, 0, 1);
+}
 
 export function buildCity(M, world) {
   const G = new THREE.Group();
   const R = rng(2024);
-  const walls = new ColorBucket(), roofs = new ColorBucket(), socles = new Bucket(), doors = new Bucket(), marble = new Bucket(), grey = new Bucket(), ashlar = new Bucket(), pave = new Bucket(), wood = new Bucket(), woodDark = new Bucket(), canvas = new Bucket(), egg = new Bucket(), statue = new Bucket(), gravel = new Bucket();
+  const doorWood = new ColorBucket();
+  const walls = new ColorBucket(0.3), roofs = new ColorBucket(0.3), socles = new Bucket(), doors = new Bucket(), marble = new Bucket(), grey = new Bucket(), ashlar = new Bucket(), pave = new Bucket(), wood = new Bucket(), woodDark = new Bucket(), canvas = new Bucket(), egg = new Bucket(), statue = new Bucket(), gravel = new Bucket();
   const pick = arr => arr[Math.floor(R() * arr.length)];
   const inFlat = (x, z, m = 8) => flats.some(f => f.r ? Math.hypot(x - f.cx, z - f.cz) < f.r + m : (Math.abs(x - f.cx) < f.hw + m && Math.abs(z - f.cz) < f.hd + m));
 
   // ---------- plan: public sites claim ground before any house is placed ----------
   const layout = world.layout || (world.layout = createLayout());
-  const B = { walls, roofs, socles, doors, marble, grey, ashlar, pave, wood, woodDark, canvas, egg, statue, gravel };
+  const B = { doorWood, walls, roofs, socles, doors, marble, grey, ashlar, pave, wood, woodDark, canvas, egg, statue, gravel };
   const ctx = { M, world, layout, B, G, setupMaterial: world.setupMaterial || (m => m), kit: { stoa, ship, hipRoof, gableRoof, gableEnds, roadGeometry } };
   const runFeatures = (stage) => {
     for (const f of FEATURES) {
@@ -54,7 +81,7 @@ export function buildCity(M, world) {
   // site removes those houses and leaves the rest of the town exactly as it was.
   let houseCount = 0;
   function house(x, z, w, d, h, ry, two, lot) {
-    const pc = pick(PLASTER), rc = pick(ROOFS);
+    let pc = pick(PLASTER), rc = pick(ROOFS);
     const gab = R() < 0.35;
     const doorOff = (R() - 0.5) * (w - 3);
     let wing = null;
@@ -82,21 +109,24 @@ export function buildCity(M, world) {
     if (![[rec.minX, rec.minZ], [rec.maxX, rec.minZ], [rec.minX, rec.maxZ], [rec.maxX, rec.maxZ]].every(([px, pz]) => insideWalls(px, pz, 8))) { lot.state = 'outside'; return; }   // no town house outside its own walls
 
     const gy = rec.y;
+    const wear = rec.wear = houseWear(rec.id, x, z), WR = rng(911 + rec.id * 31);
+    if (WR() < 0.08 + 0.3 * wear) { pc = CLAY[Math.floor(WR() * CLAY.length)]; rec.plaster = pc; }
+    if (WR() < 0.5 * wear) { rc = new THREE.Color(rc).lerp(new THREE.Color(OLDROOFS[Math.floor(WR() * OLDROOFS.length)]), 0.3 + 0.5 * wear).getHex(); rec.roof = rc; }
     const m = mat(x, gy, z, 0, ry, 0);
     socles.add(box(w + 0.12, 3.2, d + 0.12), m.clone().multiply(mat(0, -0.6, 0)));
-    walls.add(box(w, h - 1.0, d), m.clone().multiply(mat(0, 1.0 + (h - 1) / 2, 0)), pc);
-    if (gab) { roofs.add(gableRoof(w, d), m.clone().multiply(mat(0, h, 0)), rc); walls.add(gableEnds(w, d), m.clone().multiply(mat(0, h, 0)), pc); }
-    else roofs.add(hipRoof(w, d), m.clone().multiply(mat(0, h, 0)), rc);
-    walls.add(box(w + 0.9, 0.1, d + 0.9), m.clone().multiply(mat(0, h + 0.05, 0)), 0xd8ccb8);
+    walls.add(box(w, h - 1.0, d), m.clone().multiply(mat(0, 1.0 + (h - 1) / 2, 0)), pc, wear);
+    if (gab) { roofs.add(gableRoof(w, d), m.clone().multiply(mat(0, h, 0)), rc, wear); walls.add(gableEnds(w, d), m.clone().multiply(mat(0, h, 0)), pc, wear); }
+    else roofs.add(hipRoof(w, d), m.clone().multiply(mat(0, h, 0)), rc, wear);
+    walls.add(box(w + 0.9, 0.1, d + 0.9), m.clone().multiply(mat(0, h + 0.05, 0)), 0xd8ccb8, wear);
     // door on the front (+z local) and a couple of windows
-    doors.add(box(1.1, 2.1, 0.14), m.clone().multiply(mat(doorOff, 1.05, d / 2 + 0.02)));
+    doorWood.add(DOOR_LEAF, m.clone().multiply(mat(doorOff, 1.05, d / 2 + 0.02)), doorColor(rec.id, wear));
     if (two) for (let i = 0; i < 2; i++) doors.add(box(0.55, 0.7, 0.12), m.clone().multiply(mat((i - 0.5) * w * 0.5, h - 1.4, d / 2 + 0.02)));
     // occasional wing
     if (wing) {
       const { ww, wd, wh, ox, oz } = wing;
       socles.add(box(ww + 0.12, 3.2, wd + 0.12), m.clone().multiply(mat(ox, -0.6, oz)));
-      walls.add(box(ww, wh - 1.0, wd), m.clone().multiply(mat(ox, 1.0 + (wh - 1) / 2, oz)), pc);
-      roofs.add(hipRoof(ww, wd), m.clone().multiply(mat(ox, wh, oz)), rc);
+      walls.add(box(ww, wh - 1.0, wd), m.clone().multiply(mat(ox, 1.0 + (wh - 1) / 2, oz)), pc, wear);
+      roofs.add(hipRoof(ww, wd), m.clone().multiply(mat(ox, wh, oz)), rc, wear);
       world.colliders.push({ minX: rec.wing.x - ww / 2 - 0.3, maxX: rec.wing.x + ww / 2 + 0.3, minZ: rec.wing.z - wd / 2 - 0.3, maxZ: rec.wing.z + wd / 2 + 0.3 });
     }
     // collider (axis aligned)
@@ -361,7 +391,16 @@ export function buildCity(M, world) {
   layout.finalizeStreets(world);
 
   { const mesh = roads.mesh(M.roadEarth || M.gravel, false); if (mesh) { mesh.name = 'city'; G.add(mesh); } }
-  for (const [b, m] of [[walls, M.plaster], [roofs, M.roof], [socles, M.sandstone], [doors, M.doorDark], [marble, M.marble], [grey, M.marbleGrey], [ashlar, M.ashlar], [pave, M.pave], [wood, M.wood], [woodDark, M.woodDark], [canvas, M.sand], [egg, M.eggDart], [statue, M.marbleStatue], [gravel, M.gravel]]) {
+  const ground = (x, z) => inTerrace(x, z) ? 0 : terrainHeight(x, z);
+  // the town's other walls and roofs (yards, annexes, workshops) wear like the house they stand by
+  const wearAt = (x, z) => {
+    const blk = layout.block(Math.floor((x - 145) / 45), Math.floor((z - 64) / 60)); if (!blk) return null;
+    let best = null, bd = 12;
+    for (const h of blk.houses) { const d = Math.max(h.minX - x, x - h.maxX, h.minZ - z, z - h.maxZ, 0); if (d < bd) { bd = d; best = h; } }
+    return best ? best.wear : null;
+  };
+  walls.fillGround(ground, wearAt); roofs.fillGround(ground, wearAt);
+  for (const [b, m] of [[walls, M.plaster], [roofs, M.roof], [doorWood, M.doorWood], [socles, M.sandstone], [doors, M.doorDark], [marble, M.marble], [grey, M.marbleGrey], [ashlar, M.ashlar], [pave, M.pave], [wood, M.wood], [woodDark, M.woodDark], [canvas, M.sand], [egg, M.eggDart], [statue, M.marbleStatue], [gravel, M.gravel]]) {
     const mesh = b.mesh(m); if (mesh) { mesh.name = 'city'; if (b === gravel || b === pave) mesh.castShadow = false; G.add(mesh); }
   }
   G.userData.houseCount = houseCount;

@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { Bucket, ColorBucket, box, lathe, tubeY, rectSweep, mat, rng, lerp, clamp, TAU, makeNoise2D } from '../util.js';
 import { terrainHeight, slopeAt, inTerrace, SEA, flats } from '../terrain.js';
-import { insideWalls } from '../city.js';
+import { insideWalls, plankUV, doorColor } from '../city.js';
 
 export const name = 'residential';
 export function plan() {}
@@ -674,7 +674,7 @@ export function build(ctx) {
     const shopDoor = shop && shop.s === 0 && Math.abs(du - shop.uc) < shop.ow / 2 + 0.3, wingR = h.wing && { minX: h.wing.x - h.wing.w / 2, maxX: h.wing.x + h.wing.w / 2, minZ: h.wing.z - h.wing.d / 2, maxZ: h.wing.z + h.wing.d / 2 };
     const open = (ua, ub, o0, o1, lim = blim) => { const r = f.rect(ua, ub, o0, o1); return yardOk(ua, ub, o1) && (inYard || inRect(r, lim)) && free(r, h.id, 0.1) && !CG.hit(r, 0.02) && !(wingR && ov(r, wingR, 0.25)) && !(shop && shop.s === 0 && ub > shop.uc - shop.ow / 2 - 0.35 && ua < shop.uc + shop.ow / 2 + 0.35); };
     // a door leaf set in the socle's face (the original door box stands 0.09 m out: this covers it), and the old doorway walled up in the wall's own finish
-    const doorLeaf = (y0, y1) => B.doors.add(boxF(1.1, y1 - y0, 0.06, 'Z'), f.M(du, (y0 + y1) / 2, 0.07));
+    const doorLeaf = (y0, y1) => B.doorWood.add(plankUV(boxF(1.1, y1 - y0, 0.06, 'Z')), f.M(du, (y0 + y1) / 2, 0.07), doorColor(h.id, h.wear));
     const wallUp = (y0, y1) => {
       const sT = Math.min(y1, h.y + 1.0);
       if (sT > y0) B.socles.add(patchGeo(1.16, sT - y0, 0.11, sT < y1 ? 0 : 0.14), f.M(du, y0, 0));
@@ -699,7 +699,7 @@ export function build(ctx) {
       }
       if (!best) return null;
       const { fs, u, gMax, gMin } = best, yS = Math.max(h.y, gMax + 0.02);
-      B.doors.add(boxF(1.0, 2.0, 0.06, 'Z'), fs.M(u, yS + 1.0, 0.07));
+      B.doorWood.add(plankUV(boxF(1.0, 2.0, 0.06, 'Z')), fs.M(u, yS + 1.0, 0.07), doorColor(h.id, h.wear));
       for (const sd of [-1, 1]) B.socles.add(boxF(0.12, 2.05, 0.16, 'XxZ'), fs.M(u + sd * 0.56, yS + 0.975, 0.08));
       B.socles.add(boxF(1.4, 0.22, 0.18, 'XxYyZ'), fs.M(u, yS + 2.11, 0.09));
       let stepTop = null;
